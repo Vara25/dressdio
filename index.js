@@ -14,6 +14,8 @@ const { saveCode } = require("./verifyCode/codeStore");
 const { getCode, removeCode } = require("./verifyCode/codeStore");
 
 const { ethers } = require("ethers");
+const { ObjectId } = require('mongodb');
+
 
 
 dotenv.config();
@@ -148,7 +150,7 @@ client.connect().then(() => {
     const user = await usersCollection.findOne({ email });
 
     if (!user) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return res.status(401).json({ message: "User not Registered." });
     }
 
     if (!user.isVerified) {
@@ -156,6 +158,7 @@ client.connect().then(() => {
     }
 
     const match = await bcrypt.compare(password, user.password);
+    
     if (!match) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
@@ -166,6 +169,7 @@ client.connect().then(() => {
       token,
       userId: user._id,
       role: user.role || null,
+      walletAddress: user.walletAddress,
     });
   });
 
@@ -241,6 +245,8 @@ app.post("/api/sign/message", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
+
 
 
 
@@ -337,7 +343,7 @@ app.post("/admin/roles", authenticate, async (req, res) => {
   res.json({ message: `User role ${decision.toLowerCase()}d` });
 });
 
-//API to get all ipNFTs(Tested)
+//API to mint ipNFTs(Tested)
 app.post("/api/ipnft/mint", upload.single("imageFile"), async (req, res) => {
   const db = client.db("Dressdio_DB");
   const ipnfts = db.collection("ipNFTs");
@@ -427,6 +433,162 @@ app.post("/api/project/create", async (req, res) => {
   } catch (err) {
     console.error("Project creation error:", err);
     res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+
+// const { ObjectId } = require("mongodb");
+
+app.post("/api/sbt/issue", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const users = db.collection("Accounts");
+  const sbts = db.collection("SBTs");
+
+  const { email, creatorType, tokenURI, description } = req.body;
+
+  if (!email || !creatorType || !tokenURI || !description) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  try {
+    // ✅ Find user by email
+    const user = await users.findOne({ email: email.toLowerCase() });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // ✅ Simulate a transaction hash
+    const transactionHash = `0x${Math.random().toString(16).substring(2, 66)}`;
+
+    // ✅ Create SBT record
+    const sbtResult = await sbts.insertOne({
+      userId: user._id,
+      creatorType: creatorType.toUpperCase(),
+      tokenURI,
+      description,
+      usageCount: 0,
+      transactionHash,
+      issuedAt: new Date()
+    });
+
+    // ✅ Update user's role and link SBT
+    await users.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          role: creatorType.toUpperCase(),
+          sbtId: sbtResult.insertedId
+        }
+      }
+    );
+
+    res.status(200).json({
+      sbtId: sbtResult.insertedId,
+      transactionHash
+    });
+  } catch (err) {
+    console.error("❌ SBT Issue Error:", err);
+    res.status(500).json({ message: "Server error issuing SBT" });
+  }
+});
+
+
+app.get("/api/collection/getReviewApplications", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const collections = db.collection("collections");
+
+  try {
+    const pending = await collections
+      .find({ status: { $in: ["PENDING", "REVIEW"] } })
+      .toArray();
+
+    res.json(pending);
+  } catch (err) {
+    console.error("❌ Error fetching review collections:", err);
+    res.status(500).json({ message: "Failed to fetch collections" });
+  }
+});
+
+// API to approve or reject a collection application
+app.post("/api/collection/reviewApplication", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const collections = db.collection("collections");
+
+  const { collectionId, decision } = req.body;
+
+  if (!collectionId || !["APPROVED", "REJECTED"].includes(decision)) {
+    return res.status(400).json({ message: "Missing or invalid fields" });
+  }
+
+  try {
+    await collections.updateOne(
+      { _id: new ObjectId(collectionId) },
+      {
+        $set: {
+          status: decision,
+          reviewedAt: new Date(),
+        },
+      }
+    );
+
+    res.json({ message: `Collection ${decision.toLowerCase()} successfully.` });
+  } catch (err) {
+    console.error("❌ Error updating collection:", err);
+    res.status(500).json({ message: "Failed to update collection status" });
+  }
+});
+
+//API to create a collection
+app.post("/api/collection/createCollection", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const collections = db.collection("collections");
+
+  const {
+    walletAddress,
+    collectionName,
+    collectionDescription,
+    category,
+    royalty,
+    collectionImage
+  } = req.body;
+
+  if (
+    !walletAddress || !collectionName || !collectionDescription ||
+    !category || royalty === undefined || !collectionImage
+  ) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  try {
+    // Optional: Check if collection name already exists for the wallet
+    const duplicate = await collections.findOne({
+      walletAddress: walletAddress.toLowerCase(),
+      collectionName
+    });
+
+    if (duplicate) {
+      return res.status(409).json({ message: "Collection already exists" });
+    }
+
+    const result = await collections.insertOne({
+      walletAddress: walletAddress.toLowerCase(),
+      collectionName,
+      collectionDescription,
+      category,
+      royalty: parseFloat(royalty),
+      collectionImage,
+      status: "PENDING",
+      createdAt: new Date()
+    });
+
+    res.status(201).json({
+      message: "Collection created successfully",
+      collectionId: result.insertedId
+    });
+  } catch (err) {
+    console.error("❌ Error creating collection:", err);
+    res.status(500).json({ message: "Failed to create collection" });
   }
 });
 
