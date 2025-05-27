@@ -344,102 +344,379 @@ app.post("/admin/roles", authenticate, async (req, res) => {
 });
 
 //API to mint ipNFTs(Tested)
-app.post("/api/ipnft/mint", upload.single("imageFile"), async (req, res) => {
+// const upload = multer({ storage: multer.memoryStorage() });
+
+app.post("/api/ipnft/mint", async (req, res) => {
   const db = client.db("Dressdio_DB");
   const ipnfts = db.collection("ipNFTs");
 
-  const { userId, name, description, price, influencerShare, ipfsURI, txHash } = req.body;
-//   const imageFile = req.file;
+  const { userId, name, description, price, priceSupplied } = req.body;
+  // const imageFile = req.file;
 
-  if (!userId || !name || !description || !price || !influencerShare || !ipfsURI || !txHash) {
+  if (!userId || !name || !description || !price || !priceSupplied) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
   try {
-    // Upload to IPFS (mock or real)
-    // const ipfsURI = await uploadToIPFS(imageFile.buffer, imageFile.originalname);
-
-    // const transactionHash = `0x${Math.random().toString(16).substring(2, 66)}`;
+    // Simulate IPFS upload (replace with real call)
+    // const ipfsURI = `ipfs://bafy${Math.random().toString(36).substring(2, 8)}/${imageFile.originalname}`;
 
     const result = await ipnfts.insertOne({
       creatorId: new ObjectId(userId),
       name,
       description,
-      ipfsURI,
+      // ipfsURI,
       price: parseFloat(price),
-      influencerShare: parseFloat(influencerShare),
-      txHash,
+      priceSupplied: parseFloat(priceSupplied),
       createdAt: new Date(),
+      transactionHash: `0x${Math.random().toString(16).substring(2, 66)}`
     });
 
-    res.json({
+    res.status(201).json({
       ipnftId: result.insertedId,
-      ipfsURI,
-      txHash,
+      // ipfsURI,
+      transactionHash: result.transactionHash,
+      metadata: {
+        name,
+        creator: userId
+      }
     });
   } catch (err) {
-    console.error("IP NFT mint error:", err);
-    res.status(500).json({ message: "Server error" });
+    console.error("IPNFT Mint Error:", err);
+    res.status(500).json({ message: "Failed to mint IPNFT" });
   }
 });
 
-//API to create a NFT project
-app.post("/api/project/create", async (req, res) => {
+
+//API to get all IP NFTs(un-tested, ambiguous)
+app.get("/api/ipnft/list", async (req, res) => {
   const db = client.db("Dressdio_DB");
-  const projects = db.collection("projects");
-  const ipnfts = db.collection("ipnfts");
+  const ipnfts = db.collection("ipNFTs");
 
-  const { influencerId, name, description, ipnftIds, maxSupply } = req.body;
+  const { userId } = req.query;
 
-  if (!influencerId || !name || !description || !ipnftIds || !maxSupply) {
-    return res.status(400).json({ message: "Missing required fields" });
+  const query = {};
+
+  if (userId) {
+    if (ObjectId.isValid(userId)) {
+      query.creatorId = new ObjectId(userId);
+    } else {
+      return res.status(400).json({ message: "Invalid userId format" });
+    }
   }
 
   try {
-    // Convert IP NFT IDs to ObjectIds
-    const ipnftObjectIds = ipnftIds.map((id) => new ObjectId(id));
+    const nfts = await ipnfts.find(query).toArray();
 
-    // Fetch IP NFTs to get their creator IDs
-    const ipnftDocs = await ipnfts
-      .find({ _id: { $in: ipnftObjectIds } })
-      .toArray();
-
-    // Extract unique creator IDs
-    const uniqueCreators = [
-      ...new Set(ipnftDocs.map((ipnft) => ipnft.creatorId.toString())),
-    ].map((id) => new ObjectId(id));
-
-    // Build approvals list
-    const approvals = uniqueCreators.map((creatorId) => ({
-      creatorId,
-      signed: false,
+    const formatted = nfts.map((nft) => ({
+      ipnftId: nft._id,
+      name: nft.name,
+      ipfsURI: nft.ipfsURI,
+      price: nft.price
     }));
 
+    res.json(formatted);
+  } catch (err) {
+    console.error("❌ IPNFT List Error:", err);
+    res.status(500).json({ message: "Failed to fetch IPNFTs" });
+  }
+});
+
+//API to get a specific IP NFT by ID(un-tested, ambiguous)
+app.get("/api/ipnft/:ipnftId", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const ipnfts = db.collection("ipNFTs");
+  const sbts = db.collection("sbts");
+
+  const { ipnftId } = req.params;
+
+  if (!ObjectId.isValid(ipnftId)) {
+    return res.status(400).json({ message: "Invalid IPNFT ID format" });
+  }
+
+  try {
+    const nft = await ipnfts.findOne({ _id: new ObjectId(ipnftId) });
+    if (!nft) {
+      return res.status(404).json({ message: "IPNFT not found" });
+    }
+
+    const creatorSBT = await sbts.findOne({ userId: nft.creatorId });
+
+    res.json({
+      name: nft.name,
+      description: nft.description,
+      imageURI: nft.ipfsURI,
+      creatorSBT: {
+        sbtId: creatorSBT?._id,
+        creatorType: creatorSBT?.creatorType,
+        creatorName: creatorSBT?.creatorName || "Unknown"
+      },
+      usageCount: nft.usageCount || 0,
+      royaltySplits: {
+        creator: 70,
+        influencer: 20,
+        platform: 10
+      },
+      mintedAt: nft.createdAt
+    });
+  } catch (err) {
+    console.error("IPNFT Fetch Error:", err);
+    res.status(500).json({ message: "Failed to fetch IPNFT metadata" });
+  }
+});
+
+//API to apply to Creator role(tested - optinal) 
+app.post("/api/creator/apply", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const applications = db.collection("creatorApplications");
+  const users = db.collection("Accounts");
+
+  const { userId, creatorType, portfolioLink, applicationMessage } = req.body;
+
+  if (!userId || !creatorType || !portfolioLink || !applicationMessage) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  if (!ObjectId.isValid(userId)) {
+    return res.status(400).json({ message: "Invalid userId format" });
+  }
+
+  try {
+    const user = await users.findOne({ _id: new ObjectId(userId) });
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const result = await applications.insertOne({
+      userId: new ObjectId(userId),
+      creatorType: creatorType.toUpperCase(),
+      portfolioLink,
+      applicationMessage,
+      status: "PENDING",
+      submittedAt: new Date()
+    });
+
+    res.status(201).json({
+      message: "Application submitted successfully",
+      applicationId: result.insertedId
+    });
+  } catch (err) {
+    console.error("❌ Creator Application Error:", err);
+    res.status(500).json({ message: "Failed to submit application" });
+  }
+});
+
+
+//API to create a NFT project(tested)
+app.post("/api/project/create", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const projects = db.collection("projects");
+  const ipnfts = db.collection("ipNFTs");
+
+  const { influencerId, name, description, ipnftIds, maxSupply } = req.body;
+
+  if (!influencerId || !name || !description || !Array.isArray(ipnftIds) || maxSupply === undefined) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  if (!ObjectId.isValid(influencerId)) {
+    return res.status(400).json({ message: "Invalid influencerId format" });
+  }
+
+  try {
+    // Validate IPNFT IDs
+    const ipnftObjectIds = ipnftIds.map(id => new ObjectId(id));
+    const ipnftDocs = await ipnfts.find({ _id: { $in: ipnftObjectIds } }).toArray();
+
+    if (ipnftDocs.length !== ipnftIds.length) {
+      return res.status(400).json({ message: "One or more IPNFT IDs are invalid" });
+    }
+
+    // Create the project
     const result = await projects.insertOne({
       influencerId: new ObjectId(influencerId),
       name,
       description,
       ipnftIds: ipnftObjectIds,
-      approvals,
       maxSupply: parseInt(maxSupply),
-      status: "PENDING",
-      createdAt: new Date(),
+      status: "PENDING_APPROVAL",
+      createdAt: new Date()
     });
 
-    res.json({
+    res.status(201).json({
       projectId: result.insertedId,
-      status: "PENDING",
+      status: "PENDING_APPROVAL"
     });
   } catch (err) {
-    console.error("Project creation error:", err);
-    res.status(500).json({ message: "Server error" });
+    console.error("❌ Project Create Error:", err);
+    res.status(500).json({ message: "Failed to create project" });
+  }
+});
+
+//API to Approve or reject a project application(tested)
+
+app.post("/api/project/approve", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const projects = db.collection("projects");
+
+  const { projectId, influencerId, decision, signature } = req.body;
+
+  if (!projectId || !influencerId || !decision || !signature) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  if (!["APPROVE", "REJECT"].includes(decision)) {
+    return res.status(400).json({ message: "Invalid decision" });
+  }
+
+  if (!ObjectId.isValid(projectId) || !ObjectId.isValid(influencerId)) {
+    return res.status(400).json({ message: "Invalid projectId or influencerId format" });
+  }
+
+  try {
+    const project = await projects.findOne({
+      _id: new ObjectId(projectId),
+      influencerId: new ObjectId(influencerId)
+    });
+
+    if (!project) {
+      return res.status(404).json({ message: "Project not found or unauthorized" });
+    }
+
+    const newStatus = decision === "APPROVE" ? "APPROVED" : "REJECTED";
+
+    await projects.updateOne(
+      { _id: new ObjectId(projectId) },
+      {
+        $set: {
+          status: newStatus,
+          approvedBy: new ObjectId(influencerId),
+          approvalSignature: signature,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    res.json({
+      approvalStatus: newStatus,
+      approvedBy: influencerId
+    });
+  } catch (err) {
+    console.error("❌ Project Approval Error:", err);
+    res.status(500).json({ message: "Failed to update project status" });
+  }
+});
+
+//API to get project by ID(tested)
+app.get("/api/project/:projectId", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const projects = db.collection("projects");
+
+  const { projectId } = req.params;
+
+  if (!ObjectId.isValid(projectId)) {
+    return res.status(400).json({ message: "Invalid projectId format" });
+  }
+
+  try {
+    const project = await projects.findOne({ _id: new ObjectId(projectId) });
+
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+
+    res.json({
+      projectId: project._id,
+      name: project.name,
+      description: project.description,
+      influencerId: project.influencerId,
+      ipnftIds: project.ipnftIds,
+      maxSupply: project.maxSupply,
+      status: project.status,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt || null
+    });
+  } catch (err) {
+    console.error("❌ Project Fetch Error:", err);
+    res.status(500).json({ message: "Failed to fetch project" });
+  }
+});
+
+//API to mint a Merch NFT(tested, ambiguous)
+app.post("/api/merchnft/mint", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const projects = db.collection("projects");
+  const merchNFTs = db.collection("merchNFTs");
+
+  const { projectId, buyerId, paymentTxHash } = req.body;
+
+  if (!projectId || !buyerId || !paymentTxHash) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  if (!ObjectId.isValid(projectId) || !ObjectId.isValid(buyerId)) {
+    return res.status(400).json({ message: "Invalid projectId or buyerId format" });
+  }
+
+  try {
+    const project = await projects.findOne({ _id: new ObjectId(projectId) });
+
+    if (!project) {
+      return res.status(400).json({ message: "Invalid project ID" });
+    }
+
+    if (project.status !== "APPROVED") {
+      return res.status(403).json({ message: "Buyer not authorized or Project not approved" });
+    }
+
+    // Check sold-out condition
+    const mintedCount = await merchNFTs.countDocuments({ projectId: new ObjectId(projectId) });
+    if (mintedCount >= project.maxSupply) {
+      return res.status(409).json({ message: "Project sold out" });
+    }
+
+    // (Optional) Check buyer eligibility here if needed
+    // For now we assume any buyerId is authorized
+
+    // Simulate IPFS metadata upload (replace with actual IPFS call)
+    const ipfsURI = `ipfs://bafy${Math.random().toString(36).substring(2, 8)}/merch-nft.json`;
+
+    // Simulate blockchain mint transaction hash
+    const blockchainTxHash = `0x${Math.random().toString(16).substring(2, 66)}`;
+
+    // Save NFT record
+    const result = await merchNFTs.insertOne({
+      projectId: new ObjectId(projectId),
+      buyerId: new ObjectId(buyerId),
+      paymentTxHash,
+      ipfsURI,
+      transactionHash: blockchainTxHash,
+      mintedAt: new Date()
+    });
+
+    res.status(201).json({
+      nftId: result.insertedId,
+      ipfsURI,
+      transactionHash: blockchainTxHash
+    });
+  } catch (err) {
+    console.error("❌ Merch NFT Mint Error:", err);
+    res.status(500).json({ message: "Failed to mint merch NFT" });
   }
 });
 
 
 
-// const { ObjectId } = require("mongodb");
 
+
+
+
+
+
+
+
+
+//API to issue a Soulbound Token (SBT) to a user(un-tested)
 app.post("/api/sbt/issue", async (req, res) => {
   const db = client.db("Dressdio_DB");
   const users = db.collection("Accounts");
@@ -591,6 +868,140 @@ app.post("/api/collection/createCollection", async (req, res) => {
     res.status(500).json({ message: "Failed to create collection" });
   }
 });
+
+
+const multer = require("multer");
+const upload = multer({ storage: multer.memoryStorage() });
+
+const { uploadToIPFS } = require("./ipfsUpload/upload"); // your IPFS handler
+
+//API to upload image to IPFS server(un-tested)
+app.post("/image/uploadImage2Server", upload.single("image"), async (req, res) => {
+  try {
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({ message: "No image file uploaded" });
+    }
+
+    const ipfsURI = await uploadToIPFS(file.buffer, file.originalname);
+
+    res.json({
+      message: "Image uploaded successfully",
+      ipfsURI
+    });
+  } catch (err) {
+    console.error("Image upload error:", err);
+    res.status(500).json({ message: "Image upload failed" });
+  }
+});
+
+//API to mint a new NFT(un-tested)
+app.post("/nft/mint", async (req, res) => {
+  const db = client.db("vNFTy_Metadata");
+  const nfts = db.collection("nfts");
+
+  const { collectionId, name, description, imageURI, price, walletAddress } = req.body;
+
+  if (!collectionId || !name || !description || !imageURI || price === undefined || !walletAddress) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  try {
+    // Save NFT metadata in DB
+    const result = await nfts.insertOne({
+      collectionId: new ObjectId(collectionId),
+      name,
+      description,
+      imageURI,
+      price: parseFloat(price),
+      walletAddress: walletAddress.toLowerCase(),
+      createdAt: new Date()
+    });
+
+    // Prepare mock transaction data (replace with real contract call preparation)
+    const dataToSign = {
+      to: "0xCollectionContractAddress", // replace with your actual contract address
+      data: "0xabcdef123456...",         // encoded contract call (e.g., mint function)
+      value: "0",
+      nonce: 1 // optional
+    };
+
+    res.json({
+      message: "NFT metadata saved",
+      dataToSign
+    });
+  } catch (err) {
+    console.error("NFT minting error:", err);
+    res.status(500).json({ message: "Failed to mint NFT" });
+  }
+});
+
+//API to sign a transaction(un-tested)
+app.post("/blockchain/sign/transaction", async (req, res) => {
+  const { walletAddress, dataToSign } = req.body;
+
+  if (!walletAddress || !dataToSign) {
+    return res.status(400).json({ message: "Missing walletAddress or dataToSign" });
+  }
+
+  try {
+    // Simulate signing step (real signing happens in frontend or wallet)
+    const fakeSignature = `0xsignedpayload${Math.random().toString(16).substring(2, 10)}`;
+
+    res.json({
+      signature: fakeSignature
+    });
+  } catch (err) {
+    console.error("Transaction signing error:", err);
+    res.status(500).json({ message: "Failed to sign transaction" });
+  }
+});
+
+//API to send a raw transaction to the blockchain(un-tested)
+app.post("/blockchain/raw-tx/send", async (req, res) => {
+  const { signedTx } = req.body;
+
+  if (!signedTx) {
+    return res.status(400).json({ message: "Missing signedTx" });
+  }
+
+  try {
+    // Simulate sending transaction (replace with real Web3 or ethers.js send)
+    const fakeTxHash = `0x${Math.random().toString(16).substring(2, 66)}`;
+
+    res.json({
+      transactionHash: fakeTxHash,
+      status: "submitted"
+    });
+  } catch (err) {
+    console.error("Raw tx send error:", err);
+    res.status(500).json({ message: "Failed to send transaction" });
+  }
+});
+
+
+//API to get approved collections
+app.get("/collection/getmintablecollections", async (req, res) => {
+  const db = client.db("vNFTy_Metadata");
+  const collections = db.collection("collections");
+
+  try {
+    const mintableCollections = await collections
+      .find({ status: "APPROVED" })
+      .toArray();
+
+    res.json(mintableCollections);
+  } catch (err) {
+    console.error("Error fetching mintable collections:", err);
+    res.status(500).json({ message: "Failed to fetch mintable collections" });
+  }
+});
+
+
+
+
+
 
 
 
