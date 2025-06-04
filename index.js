@@ -14,9 +14,10 @@ const { saveCode } = require("./verifyCode/codeStore");
 const { getCode, removeCode } = require("./verifyCode/codeStore");
 
 const { ethers } = require("ethers");
+
+const { uploadJSONToIPFS, uploadFileToIPFS } = require('./ipfsUpload/upload'); // Adjust the path as needed
+
 const { ObjectId } = require('mongodb');
-
-
 
 dotenv.config();
 
@@ -643,15 +644,16 @@ app.get("/api/project/:projectId", async (req, res) => {
 });
 
 //API to mint a Merch NFT(tested, ambiguous)
-app.post("/api/merchnft/mint", async (req, res) => {
+app.post("/api/merchnft/mint", upload.single("image"), async (req, res) => {
   const db = client.db("Dressdio_DB");
   const projects = db.collection("projects");
   const merchNFTs = db.collection("merchNFTs");
 
   const { projectId, buyerId, paymentTxHash } = req.body;
+  const imageFile = req.file;
 
-  if (!projectId || !buyerId || !paymentTxHash) {
-    return res.status(400).json({ message: "Missing required fields" });
+  if (!projectId || !buyerId || !paymentTxHash || !imageFile) {
+    return res.status(400).json({ message: "Missing required fields or image file" });
   }
 
   if (!ObjectId.isValid(projectId) || !ObjectId.isValid(buyerId)) {
@@ -666,25 +668,21 @@ app.post("/api/merchnft/mint", async (req, res) => {
     }
 
     if (project.status !== "APPROVED") {
-      return res.status(403).json({ message: "Buyer not authorized or Project not approved" });
+      return res.status(403).json({ message: "Project not approved for minting" });
     }
 
-    // Check sold-out condition
     const mintedCount = await merchNFTs.countDocuments({ projectId: new ObjectId(projectId) });
     if (mintedCount >= project.maxSupply) {
       return res.status(409).json({ message: "Project sold out" });
     }
 
-    // (Optional) Check buyer eligibility here if needed
-    // For now we assume any buyerId is authorized
+    // ✅ Upload the image file to Pinata
+    const ipfsURI = await uploadToIPFS(imageFile.buffer, imageFile.originalname);
 
-    // Simulate IPFS metadata upload (replace with actual IPFS call)
-    const ipfsURI = `ipfs://bafy${Math.random().toString(36).substring(2, 8)}/merch-nft.json`;
-
-    // Simulate blockchain mint transaction hash
+    // ✅ Simulate blockchain mint transaction hash
     const blockchainTxHash = `0x${Math.random().toString(16).substring(2, 66)}`;
 
-    // Save NFT record
+    // ✅ Save minted NFT record
     const result = await merchNFTs.insertOne({
       projectId: new ObjectId(projectId),
       buyerId: new ObjectId(buyerId),
@@ -705,17 +703,6 @@ app.post("/api/merchnft/mint", async (req, res) => {
   }
 });
 
-
-
-
-
-
-
-
-
-
-
-
 //API to issue a Soulbound Token (SBT) to a user(un-tested)
 app.post("/api/sbt/issue", async (req, res) => {
   const db = client.db("Dressdio_DB");
@@ -732,7 +719,7 @@ app.post("/api/sbt/issue", async (req, res) => {
     // ✅ Find user by email
     const user = await users.findOne({ email: email.toLowerCase() });
     if (!user) {
-      return res.status(404).json({ message: "User not found" });
+      return res.status(404).json({ message: "User has no SBT" });
     }
 
     // ✅ Simulate a transaction hash
@@ -769,6 +756,39 @@ app.post("/api/sbt/issue", async (req, res) => {
     res.status(500).json({ message: "Server error issuing SBT" });
   }
 });
+
+app.get("/api/sbt/:userId", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const sbts = db.collection("SBTs");
+
+  const { userId } = req.params;
+
+  if (!ObjectId.isValid(userId)) {
+    return res.status(400).json({ message: "Invalid userId format" });
+  }
+
+  try {
+    const sbt = await sbts.findOne({ userId: new ObjectId(userId) });
+
+    if (!sbt) {
+      return res.status(404).json({ message: "User has no SBT" });
+    }
+
+    res.json({
+      sbtData: {
+        sbtId: sbt._id,
+        creatorType: sbt.creatorType,
+        usageCount: sbt.usageCount,
+        tokenURI: sbt.tokenURI,
+        issuedAt: sbt.issuedAt
+      }
+    });
+  } catch (err) {
+    console.error("❌ SBT Fetch Error:", err);
+    res.status(500).json({ message: "Failed to fetch SBT details" });
+  }
+});
+
 
 
 app.get("/api/collection/getReviewApplications", async (req, res) => {
@@ -870,11 +890,6 @@ app.post("/api/collection/createCollection", async (req, res) => {
 });
 
 
-const multer = require("multer");
-const upload = multer({ storage: multer.memoryStorage() });
-
-const { uploadToIPFS } = require("./ipfsUpload/upload"); // your IPFS handler
-
 //API to upload image to IPFS server(un-tested)
 app.post("/image/uploadImage2Server", upload.single("image"), async (req, res) => {
   try {
@@ -898,7 +913,7 @@ app.post("/image/uploadImage2Server", upload.single("image"), async (req, res) =
 
 //API to mint a new NFT(un-tested)
 app.post("/nft/mint", async (req, res) => {
-  const db = client.db("vNFTy_Metadata");
+  const db = client.db("Dressdio_DB");
   const nfts = db.collection("nfts");
 
   const { collectionId, name, description, imageURI, price, walletAddress } = req.body;
@@ -997,6 +1012,101 @@ app.get("/collection/getmintablecollections", async (req, res) => {
     res.status(500).json({ message: "Failed to fetch mintable collections" });
   }
 });
+
+//API to mint poersonal NFTs
+app.post("/api/personalnft/mint", async (req, res) => {
+  const db = client.db("Dressdio_DB");
+  const personalNFTs = db.collection("personalNFTs");
+  const ipnfts = db.collection("ipnfts");
+
+  const { buyerId, designIpNftId, artworkIpNftId, paymentTxHash } = req.body;
+
+  if (!buyerId || !designIpNftId || !artworkIpNftId || !paymentTxHash) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  if (
+    !ObjectId.isValid(buyerId) ||
+    !ObjectId.isValid(designIpNftId) ||
+    !ObjectId.isValid(artworkIpNftId)
+  ) {
+    return res.status(400).json({ message: "Invalid ID format" });
+  }
+
+  try {
+    // Validate referenced IPNFTs
+    const designNft = await ipnfts.findOne({ _id: new ObjectId(designIpNftId) });
+    const artworkNft = await ipnfts.findOne({ _id: new ObjectId(artworkIpNftId) });
+
+    if (!designNft || !artworkNft) {
+      return res.status(403).json({ message: "Invalid design or artwork IPNFT permissions" });
+    }
+
+    // ✅ Compose metadata for personal NFT
+    const metadata = {
+      name: `${designNft.name} + ${artworkNft.name} Custom NFT`,
+      description: "Personalized NFT composed from selected design and artwork.",
+      composedFrom: {
+        design: designIpNftId,
+        artwork: artworkIpNftId
+      },
+      buyerId: buyerId,
+      timestamp: new Date().toISOString()
+    };
+
+    // ✅ Upload metadata to IPFS via Pinata
+    const ipfsURI = await uploadFileToIPFS(imageFile.buffer, imageFile.originalname);
+
+
+    // ✅ Simulate blockchain mint tx hash
+    const blockchainTxHash = `0x${Math.random().toString(16).substring(2, 66)}`;
+
+    // ✅ Save personal NFT record
+    const result = await personalNFTs.insertOne({
+      buyerId: new ObjectId(buyerId),
+      designIpNftId: new ObjectId(designIpNftId),
+      artworkIpNftId: new ObjectId(artworkIpNftId),
+      ipfsURI,
+      paymentTxHash,
+      transactionHash: blockchainTxHash,
+      mintedAt: new Date()
+    });
+
+    res.status(201).json({
+      nftId: result.insertedId,
+      ipfsURI,
+      composedFrom: {
+        design: designIpNftId,
+        artwork: artworkIpNftId
+      }
+    });
+  } catch (err) {
+    console.error("❌ Personal NFT Mint Error:", err);
+    res.status(500).json({ message: "Failed to mint personal NFT" });
+  }
+});
+
+//API to upload an image to IPFS and return the URI
+app.post('/api/ipfs/upload', upload.single('image'), async (req, res) => {
+  const imageFile = req.file;
+
+  if (!imageFile) {
+    return res.status(400).json({ message: 'No image file uploaded' });
+  }
+
+  try {
+    const ipfsURI = await uploadFileToIPFS(imageFile.buffer, imageFile.originalname);
+    res.json({
+      message: 'Image uploaded successfully',
+      ipfsURI
+    });
+  } catch (err) {
+    console.error('❌ Error uploading to IPFS:', err);
+    res.status(500).json({ message: 'Failed to upload image to IPFS' });
+  }
+});
+
+
 
 
 
