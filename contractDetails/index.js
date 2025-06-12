@@ -1,7 +1,10 @@
+const contractAddress = "0xcF2A606A93cf08FD3F45020A14E07c5B74b7DBeA"; // Replace with your contract address
 
-export const contractAddress = "0xC4fd259BB1C5c2078eA79940eCf6Adc917800f8F"; // Replace with your contract address
+ const privateKey = "08ea430735cdb2b440e20b5bad77354ebdcbba85eeb509774de29c6ee1fc25b0";
 
-export const contractABI = [
+ const rpcEndpoint = "http://3.38.125.193:8545/"; // Replace with your RPC endpoint
+
+ const contractABI = [
 	{
 		"inputs": [],
 		"stateMutability": "nonpayable",
@@ -453,3 +456,10 @@ export const contractABI = [
 		"type": "function"
 	}
 ];
+
+module.exports = {
+  contractAddress,
+  privateKey,
+  rpcEndpoint,
+  contractABI
+};

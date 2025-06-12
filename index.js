@@ -12,17 +12,15 @@ const upload = multer({ storage });
 const { sendVerificationCode } = require("./mail/mailer");
 const { saveCode } = require("./verifyCode/codeStore");
 const { getCode, removeCode } = require("./verifyCode/codeStore");
-
+const { contractAddress, rpcEndpoint, contractABI, privateKey } = require("./contractDetails/index"); // Adjust the path as needed
 const { ethers } = require("ethers");
-
 const { uploadJSONToIPFS, uploadFileToIPFS } = require('./ipfsUpload/upload'); // Adjust the path as needed
-
 const { ObjectId } = require('mongodb');
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 
 // MongoDB URI from .env
 const mongoURI = process.env.MONGO_URI;
@@ -266,6 +264,7 @@ app.post("/api/sign/message", async (req, res) => {
 
   // API to request a role(un-tested)
   const { ObjectId } = require("mongodb");
+const { ethers } = require("ethers");
 
 app.post("/roles/request", authenticate, async (req, res) => {
   const { role } = req.body;
@@ -275,8 +274,8 @@ app.post("/roles/request", authenticate, async (req, res) => {
     return res.status(400).json({ message: "Invalid role requested" });
   }
 
-  const db = client.db("vNFTy_Metadata");
-  const users = db.collection("users");
+  const db = client.db("Dressdio_DB");
+  const users = db.collection("Accounts");
 
   const updated = await users.updateOne(
     { _id: new ObjectId(req.user.id) },
@@ -347,39 +346,41 @@ app.post("/admin/roles", authenticate, async (req, res) => {
 //API to mint ipNFTs(Tested)
 // const upload = multer({ storage: multer.memoryStorage() });
 
-app.post("/api/ipnft/mint", async (req, res) => {
+app.post("/api/ipnft/mint", upload.single("imageFile"), async (req, res) => {
   const db = client.db("Dressdio_DB");
   const ipnfts = db.collection("ipNFTs");
 
   const { userId, name, description, price, priceSupplied } = req.body;
-  // const imageFile = req.file;
+  const imageFile = req.file;
 
-  if (!userId || !name || !description || !price || !priceSupplied) {
+  if (!userId || !name || !description || !imageFile || !price || !priceSupplied) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
   try {
-    // Simulate IPFS upload (replace with real call)
-    // const ipfsURI = `ipfs://bafy${Math.random().toString(36).substring(2, 8)}/${imageFile.originalname}`;
+    // Upload image to IPFS
+    const ipfsURI = await uploadFileToIPFS(imageFile.buffer, imageFile.originalname);
+
+    // Simulate blockchain transaction hash
+    const transactionHash = `0x${Math.random().toString(16).substring(2, 66)}`;
 
     const result = await ipnfts.insertOne({
       creatorId: new ObjectId(userId),
       name,
       description,
-      // ipfsURI,
+      ipfsURI,
       price: parseFloat(price),
       priceSupplied: parseFloat(priceSupplied),
       createdAt: new Date(),
-      transactionHash: `0x${Math.random().toString(16).substring(2, 66)}`
+      transactionHash
     });
 
     res.status(201).json({
       ipnftId: result.insertedId,
-      // ipfsURI,
-      transactionHash: result.transactionHash,
-      metadata: {
-        name,
-        creator: userId
+      ipfsURI,
+      transactionHash,
+      metadata: { 
+        name
       }
     });
   } catch (err) {
@@ -408,6 +409,7 @@ app.get("/api/ipnft/list", async (req, res) => {
 
   try {
     const nfts = await ipnfts.find(query).toArray();
+    const total = nfts.length;
 
     const formatted = nfts.map((nft) => ({
       ipnftId: nft._id,
@@ -416,7 +418,10 @@ app.get("/api/ipnft/list", async (req, res) => {
       price: nft.price
     }));
 
-    res.json(formatted);
+    res.json({
+      nfts: formatted,
+      total
+    });
   } catch (err) {
     console.error("❌ IPNFT List Error:", err);
     res.status(500).json({ message: "Failed to fetch IPNFTs" });
@@ -652,16 +657,17 @@ app.post("/api/merchnft/mint", upload.single("image"), async (req, res) => {
   const { projectId, buyerId, paymentTxHash } = req.body;
   const imageFile = req.file;
 
+  // Multer expects the file field to be named "image" in the form-data.
   if (!projectId || !buyerId || !paymentTxHash || !imageFile) {
     return res.status(400).json({ message: "Missing required fields or image file" });
   }
 
-  if (!ObjectId.isValid(projectId) || !ObjectId.isValid(buyerId)) {
+  if (!ObjectId.isValid(String(projectId)) || !ObjectId.isValid(String(buyerId))) {
     return res.status(400).json({ message: "Invalid projectId or buyerId format" });
   }
 
   try {
-    const project = await projects.findOne({ _id: new ObjectId(projectId) });
+    const project = await projects.findOne({ _id: new ObjectId(String(projectId)) });
 
     if (!project) {
       return res.status(400).json({ message: "Invalid project ID" });
@@ -671,21 +677,21 @@ app.post("/api/merchnft/mint", upload.single("image"), async (req, res) => {
       return res.status(403).json({ message: "Project not approved for minting" });
     }
 
-    const mintedCount = await merchNFTs.countDocuments({ projectId: new ObjectId(projectId) });
+    const mintedCount = await merchNFTs.countDocuments({ projectId: new ObjectId(String(projectId)) });
     if (mintedCount >= project.maxSupply) {
       return res.status(409).json({ message: "Project sold out" });
     }
 
-    // ✅ Upload the image file to Pinata
-    const ipfsURI = await uploadToIPFS(imageFile.buffer, imageFile.originalname);
+    // ✅ Upload the image file to IPFS
+    const ipfsURI = await uploadFileToIPFS(imageFile.buffer, imageFile.originalname);
 
     // ✅ Simulate blockchain mint transaction hash
     const blockchainTxHash = `0x${Math.random().toString(16).substring(2, 66)}`;
 
     // ✅ Save minted NFT record
     const result = await merchNFTs.insertOne({
-      projectId: new ObjectId(projectId),
-      buyerId: new ObjectId(buyerId),
+      projectId: new ObjectId(String(projectId)),
+      buyerId: new ObjectId(String(buyerId)),
       paymentTxHash,
       ipfsURI,
       transactionHash: blockchainTxHash,
@@ -695,7 +701,11 @@ app.post("/api/merchnft/mint", upload.single("image"), async (req, res) => {
     res.status(201).json({
       nftId: result.insertedId,
       ipfsURI,
-      transactionHash: blockchainTxHash
+      transactionHash: blockchainTxHash,
+            projectDetails: {
+        name: project.name,
+        // remainingSupply: project.maxSupply; need to clarify if this is needed
+      }
     });
   } catch (err) {
     console.error("❌ Merch NFT Mint Error:", err);
@@ -709,24 +719,61 @@ app.post("/api/sbt/issue", async (req, res) => {
   const users = db.collection("Accounts");
   const sbts = db.collection("SBTs");
 
-  const { email, creatorType, tokenURI, description } = req.body;
+  const { walletAddress, userId, creatorType, tokenURI, description } = req.body;
 
-  if (!email || !creatorType || !tokenURI || !description) {
+  if (!userId || !creatorType || !tokenURI || !description || !walletAddress) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
+  // Replace with your contract details
+  // Use imported contract details from ./contractDetails/index
+  const CONTRACT_ADDRESS = contractAddress; // Already imported
+  const CONTRACT_ABI = contractABI; // Already imported
+  const RPC_URL = rpcEndpoint;
+  const PRIVATE_KEY = privateKey; // Server wallet for issuing
+  
+  if (!CONTRACT_ADDRESS || !CONTRACT_ABI.length || !RPC_URL || !PRIVATE_KEY) {
+    return res.status(500).json({ message: "Contract configuration missing" });
+  }
+
   try {
-    // ✅ Find user by email
-    const user = await users.findOne({ email: email.toLowerCase() });
+    // Validate user
+    if (!ObjectId.isValid(String(userId))) {
+      return res.status(400).json({ message: "Invalid userId format" });
+    }
+    const user = await users.findOne({ _id: new ObjectId(String(userId)) });
     if (!user) {
-      return res.status(404).json({ message: "User has no SBT" });
+      return res.status(404).json({ message: "User not found" });
     }
 
-    // ✅ Simulate a transaction hash
-    const transactionHash = `0x${Math.random().toString(16).substring(2, 66)}`;
+    // Interact with contract
+    const provider = new ethers.JsonRpcProvider(RPC_URL);
+    const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+    const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
-    // ✅ Create SBT record
+    // Example: assume contract has a mintSBT(address to, uint8 role, string creatorType, string tokenURI)
+    let tx;
+    let role = 1;
+    try {
+      // No gas estimation needed, blockchain is 0 gas
+
+            tx = await contract.mintSBT(
+        walletAddress,
+        role,
+        creatorType,
+        tokenURI,
+        { gasLimit: 500000 } // Use a reasonable gas limit
+      );
+      await tx.wait();
+    } catch (err) {
+      console.error("❌ Contract interaction error:", err);
+      return res.status(500).json({ message: "Failed to issue SBT on-chain" });
+    }
+
+    // Save SBT record in DB
+    const transactionHash = tx.hash;
     const sbtResult = await sbts.insertOne({
+      walletAddress: walletAddress,
       userId: user._id,
       creatorType: creatorType.toUpperCase(),
       tokenURI,
@@ -736,7 +783,7 @@ app.post("/api/sbt/issue", async (req, res) => {
       issuedAt: new Date()
     });
 
-    // ✅ Update user's role and link SBT
+    // Update user's role and link SBT
     await users.updateOne(
       { _id: user._id },
       {
@@ -953,7 +1000,7 @@ app.post("/nft/mint", async (req, res) => {
 });
 
 //API to sign a transaction(un-tested)
-app.post("/blockchain/sign/transaction", async (req, res) => {
+app.post("/api/sign/transaction", async (req, res) => {
   const { walletAddress, dataToSign } = req.body;
 
   if (!walletAddress || !dataToSign) {
