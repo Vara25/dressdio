@@ -1,4 +1,4 @@
-const contractAddress = "0xcF2A606A93cf08FD3F45020A14E07c5B74b7DBeA"; // Replace with your contract address
+const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace with your contract address
 
  const privateKey = "08ea430735cdb2b440e20b5bad77354ebdcbba85eeb509774de29c6ee1fc25b0";
 

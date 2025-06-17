@@ -39,6 +39,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // Add this line to parse x-www-form-urlencoded bodies
 // app.use(bodyParser.json());
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -51,73 +52,150 @@ client.connect().then(() => {
 
   // POST /api/auth/register
   app.post("/api/auth/register", async (req, res) => {
-    const { email, password, name, walletAddress, role } = req.body;
+    const { email, password, name, role,
+      code, overage, agree, collect, thirdParty, advertise, serviceId } = req.body;
 
-    if (!email || !password || !name || !walletAddress || !role) {
+    if (!email || !password || !name || !role || !code || !overage || !agree || !collect || !thirdParty || !advertise || !serviceId) {
       return res.status(400).json({ message: "Missing fields" });
     }
 
     try {
-      const existing = await usersCollection.findOne({ email, walletAddress });
+      const existing = await usersCollection.findOne({ email });
       if (existing) {
         return res.status(409).json({ message: "User already exists" });
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+      // Call external API to add user
+      const params = new URLSearchParams();
+      params.append("username", email);
+      params.append("password", password);
+      params.append("agree", agree);
+      params.append("thirdParty", thirdParty);
+      params.append("advertise", advertise);
+      params.append("serviceid", serviceId);
+      params.append("collect", collect);
+      params.append("overage", overage);
+      params.append("code", code);
 
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const addUserResponse = await fetch(
+        "https://api.waas.myabcwallet.com/member/user-management/users/v2/adduser",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded",
+              "secure-channel" : "380f0ebb1e764d8ab04689950b1725c5"
+           },
+          body: params,
+        }
+      );
 
-        await sendVerificationCode(email, code);
-        saveCode(email, code);
+      if (!addUserResponse.ok) {
+        const errorText = await addUserResponse.text();
+        return res.status(500).json({ message: "Failed to register user in external system", error: errorText });
+      }
 
-        await usersCollection.insertOne({
-        email,
-        password: hashedPassword,
-        name,
-        walletAddress,
-        role: role.toUpperCase(),
-        sbtId: null,
-        isVerified: false,
-        createdAt: new Date(),
-        });
+      // Return walletAddress immediately after successful waas API call
+      res.status(200).json({ walletAddress });
+      console.log(walletAddress)
 
+      // After responding, update the DB in the background
+      (async () => {
+        try {
+          const hashedPassword = await bcrypt.hash(password, 10);
+          // const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-      const token = jwt.sign({ id: result.insertedId }, JWT_SECRET);
+          // await sendVerificationCode(email, verificationCode);
+          // saveCode(email, verificationCode);
 
-      res.status(201).json({
-        userId: result.insertedId,
-        walletAddress,
-        token,
-      });
+          await usersCollection.insertOne({
+            email,
+            password: hashedPassword,
+            name,
+            walletAddress,
+            role: role.toUpperCase(),
+            sbtId: null,
+            isVerified: false,
+            createdAt: new Date(),
+          });
+        } catch (bgErr) {
+          console.error("Background DB update error after waas registration:", bgErr);
+        }
+      })();
+
     } catch (err) {
       console.error("Registration error:", err);
       res.status(500).json({ message: "Server error" });
     }
   });
 
-
+  //API to verify email code(tested)
     app.post("/api/auth/verify-code", async (req, res) => {
-    const { email, code } = req.body;
+      const { email, code, serviceId } = req.body;
 
-    if (!email || !code) {
+      if (!email || !code || !serviceId) {
         return res.status(400).json({ message: "Missing email or code" });
-    }
+      }
 
-    const expected = getCode(email);
-    if (!expected || expected.code !== code) {
-        return res.status(401).json({ message: "Invalid or expired code" });
-    }
+      try {
+        // Call external API to verify code
+        // const serviceId = "https://mw.myabcwallet.com"; // Hardcoded service ID
+        const params = new URLSearchParams();
+        params.append("code", code);
+        params.append("serviceId", serviceId);
 
-    const db = client.db("Dressdio_DB");
-    const users = db.collection("Accounts");
+        const response = await fetch(
+          `https://api.waas.myabcwallet.com/member/mail-service/${email}/verifycode`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: params.toString(),
+          }
+        );
 
-    await users.updateOne({ email }, { $set: { isVerified: true } });
-    removeCode(email);
+        if (!response.ok) {
+          return res.status(401).json({ message: "Invalid or expired code" });
+        }
 
-    res.json({ message: "Email verified successfully" });
+        const db = client.db("Dressdio_DB");
+        const users = db.collection("Accounts");
+
+        await users.updateOne({ email }, { $set: { isVerified: true } });
+
+        res.json({ message: "Email verified successfully" });
+      } catch (err) {
+        console.error("Verify code error:", err);
+        res.status(500).json({ message: "Server error verifying code" });
+      }
     });
 
-    app.post("/api/auth/resend-code", async (req, res) => {
+
+  //API to send verification code to email(tested)
+  app.post("/api/auth/send-code", async (req, res) => {
+    const { email } = req.body;
+    console.log("Sending code to:", email);
+
+    if (!email) {
+      return res.status(400).json({ message: "Missing email" });
+    }
+
+    try {
+      const response = await fetch(
+        `https://api.waas.myabcwallet.com/member/mail-service/${email}/sendcode?lang=en&template=verify`,
+        { method: "GET" }
+      );
+      console.log(email);
+
+      if (!response.ok) {
+        return res.status(500).json({ message: "Failed to send verification code" });
+      }
+
+      res.json({ message: "Verification code sent successfully" });
+    } catch (err) {
+      console.error("Send code error:", err);
+      res.status(500).json({ message: "Server error sending code" });
+    }
+  });
+
+  app.post("/api/auth/resend-code", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: "Email required" });
 
@@ -755,9 +833,9 @@ app.post("/api/sbt/issue", async (req, res) => {
     let tx;
     let role = 1;
     try {
-      // No gas estimation needed, blockchain is 0 gas
+      // No gas estimation needed, blockchain is 0- gas
 
-            tx = await contract.mintSBT(
+        tx = await contract.mintSBT(
         walletAddress,
         role,
         creatorType,
