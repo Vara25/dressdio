@@ -493,7 +493,8 @@ app.get("/api/ipnft/list", async (req, res) => {
       ipnftId: nft._id,
       name: nft.name,
       ipfsURI: nft.ipfsURI,
-      price: nft.price
+      price: nft.price,
+      priceSupplied: nft.priceSupplied
     }));
 
     res.json({
@@ -510,7 +511,7 @@ app.get("/api/ipnft/list", async (req, res) => {
 app.get("/api/ipnft/:ipnftId", async (req, res) => {
   const db = client.db("Dressdio_DB");
   const ipnfts = db.collection("ipNFTs");
-  const sbts = db.collection("sbts");
+  const sbts = db.collection("SBTs");
 
   const { ipnftId } = req.params;
 
@@ -524,23 +525,23 @@ app.get("/api/ipnft/:ipnftId", async (req, res) => {
       return res.status(404).json({ message: "IPNFT not found" });
     }
 
-    const creatorSBT = await sbts.findOne({ userId: nft.creatorId });
+    // Fetch all SBTs for the creatorId
+    const creatorSBTs = await sbts.find({ userId: nft.creatorId }).toArray();
 
     res.json({
       name: nft.name,
       description: nft.description,
       imageURI: nft.ipfsURI,
-      creatorSBT: {
-        sbtId: creatorSBT?._id,
-        creatorType: creatorSBT?.creatorType,
-        creatorName: creatorSBT?.creatorName || "Unknown"
-      },
+      creatorSBTs: creatorSBTs.map(sbt => ({
+        sbtId: sbt._id,
+        creatorType: sbt.creatorType,
+        creatorName: sbt.creatorName || "Unknown",
+        tokenURI: sbt.tokenURI,
+        issuedAt: sbt.issuedAt,
+        usageCount: sbt.usageCount || 0,
+        transactionHash: sbt.transactionHash
+      })),
       usageCount: nft.usageCount || 0,
-      royaltySplits: {
-        creator: 70,
-        influencer: 20,
-        platform: 10
-      },
       mintedAt: nft.createdAt
     });
   } catch (err) {
@@ -695,6 +696,7 @@ app.post("/api/project/approve", async (req, res) => {
 app.get("/api/project/:projectId", async (req, res) => {
   const db = client.db("Dressdio_DB");
   const projects = db.collection("projects");
+  const ipnfts = db.collection("ipNFTs");
 
   const { projectId } = req.params;
 
@@ -709,6 +711,16 @@ app.get("/api/project/:projectId", async (req, res) => {
       return res.status(404).json({ message: "Project not found" });
     }
 
+    // Sum up the prices of all IPNFTs in the project
+    let totalIpnftPrice = 0;
+    if (Array.isArray(project.ipnftIds) && project.ipnftIds.length > 0) {
+      const ipnftDocs = await ipnfts
+        .find({ _id: { $in: project.ipnftIds } })
+        .project({ price: 1 })
+        .toArray();
+      totalIpnftPrice = ipnftDocs.reduce((sum, nft) => sum + (nft.price || 0), 0);
+    }
+
     res.json({
       projectId: project._id,
       name: project.name,
@@ -718,7 +730,8 @@ app.get("/api/project/:projectId", async (req, res) => {
       maxSupply: project.maxSupply,
       status: project.status,
       createdAt: project.createdAt,
-      updatedAt: project.updatedAt || null
+      updatedAt: project.updatedAt || null,
+      totalIpnftPrice
     });
   } catch (err) {
     console.error("❌ Project Fetch Error:", err);
@@ -797,25 +810,30 @@ app.post("/api/sbt/issue", async (req, res) => {
   const users = db.collection("Accounts");
   const sbts = db.collection("SBTs");
 
-  const { walletAddress, userId, creatorType, tokenURI, description } = req.body;
+  const { walletAddress, userId, creatorType, tokenURI, description, creatorName } = req.body;
 
-  if (!userId || !creatorType || !tokenURI || !description || !walletAddress) {
+  if (!userId || !creatorType || !tokenURI || !description || !walletAddress || !creatorName) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
-  // Replace with your contract details
   // Use imported contract details from ./contractDetails/index
-  const CONTRACT_ADDRESS = contractAddress; // Already imported
-  const CONTRACT_ABI = contractABI; // Already imported
+  const CONTRACT_ADDRESS = contractAddress;
+  const CONTRACT_ABI = contractABI;
   const RPC_URL = rpcEndpoint;
-  const PRIVATE_KEY = privateKey; // Server wallet for issuing
-  
+  const PRIVATE_KEY = privateKey;
+
   if (!CONTRACT_ADDRESS || !CONTRACT_ABI.length || !RPC_URL || !PRIVATE_KEY) {
     return res.status(500).json({ message: "Contract configuration missing" });
   }
 
+  // Determine role value based on creatorType
+  let role = 1;
+  const type = creatorType.toUpperCase();
+  if (type === "ARTIST") role = 3;
+  else if (type === "BRAND") role = 2;
+  else if (type === "INFLUENCER") role = 1;
+
   try {
-    // Validate user
     if (!ObjectId.isValid(String(userId))) {
       return res.status(400).json({ message: "Invalid userId format" });
     }
@@ -829,18 +847,14 @@ app.post("/api/sbt/issue", async (req, res) => {
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
-    // Example: assume contract has a mintSBT(address to, uint8 role, string creatorType, string tokenURI)
     let tx;
-    let role = 1;
     try {
-      // No gas estimation needed, blockchain is 0- gas
-
-        tx = await contract.mintSBT(
+      tx = await contract.addRoleToSoul(
         walletAddress,
         role,
         creatorType,
         tokenURI,
-        { gasLimit: 500000 } // Use a reasonable gas limit
+        { gasLimit: 500000 }
       );
       await tx.wait();
     } catch (err) {
@@ -853,7 +867,8 @@ app.post("/api/sbt/issue", async (req, res) => {
     const sbtResult = await sbts.insertOne({
       walletAddress: walletAddress,
       userId: user._id,
-      creatorType: creatorType.toUpperCase(),
+      creatorType: type,
+      creatorName: creatorName,
       tokenURI,
       description,
       usageCount: 0,
@@ -866,7 +881,7 @@ app.post("/api/sbt/issue", async (req, res) => {
       { _id: user._id },
       {
         $set: {
-          role: creatorType.toUpperCase(),
+          role: type,
           sbtId: sbtResult.insertedId
         }
       }
@@ -874,7 +889,8 @@ app.post("/api/sbt/issue", async (req, res) => {
 
     res.status(200).json({
       sbtId: sbtResult.insertedId,
-      transactionHash
+      transactionHash,
+      creatorName
     });
   } catch (err) {
     console.error("❌ SBT Issue Error:", err);
@@ -1223,7 +1239,9 @@ app.post('/api/ipfs/upload', upload.single('image'), async (req, res) => {
     const ipfsURI = await uploadFileToIPFS(imageFile.buffer, imageFile.originalname);
     res.json({
       message: 'Image uploaded successfully',
-      ipfsURI
+      ipfsURI,
+      fileSize: imageFile.size,
+      fileType: imageFile.mimetype
     });
   } catch (err) {
     console.error('❌ Error uploading to IPFS:', err);

@@ -1,4 +1,4 @@
-const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace with your contract address
+const contractAddress = "0x52152933Da5BE1f19d8F8eD1D2A9de4B749aC1eD"; // Replace with your contract address
 
  const privateKey = "08ea430735cdb2b440e20b5bad77354ebdcbba85eeb509774de29c6ee1fc25b0";
 
@@ -55,12 +55,31 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 			},
 			{
 				"indexed": false,
-				"internalType": "enum RoleBasedSBT.UserType",
+				"internalType": "string",
+				"name": "newIdentity",
+				"type": "string"
+			}
+		],
+		"name": "IdentityUpdated",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "address",
+				"name": "soul",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "enum MultiRoleSBT.UserRole",
 				"name": "role",
 				"type": "uint8"
 			}
 		],
-		"name": "Minted",
+		"name": "RoleAdded",
 		"type": "event"
 	},
 	{
@@ -118,6 +137,25 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 		"inputs": [
 			{
 				"indexed": true,
+				"internalType": "address",
+				"name": "soul",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "enum MultiRoleSBT.UserRole",
+				"name": "role",
+				"type": "uint8"
+			}
+		],
+		"name": "RoleRemoved",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
 				"internalType": "bytes32",
 				"name": "role",
 				"type": "bytes32"
@@ -136,25 +174,6 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 			}
 		],
 		"name": "RoleRevoked",
-		"type": "event"
-	},
-	{
-		"anonymous": false,
-		"inputs": [
-			{
-				"indexed": true,
-				"internalType": "address",
-				"name": "soul",
-				"type": "address"
-			},
-			{
-				"indexed": false,
-				"internalType": "enum RoleBasedSBT.UserType",
-				"name": "newRole",
-				"type": "uint8"
-			}
-		],
-		"name": "Updated",
 		"type": "event"
 	},
 	{
@@ -200,6 +219,34 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 		"inputs": [
 			{
 				"internalType": "address",
+				"name": "to",
+				"type": "address"
+			},
+			{
+				"internalType": "enum MultiRoleSBT.UserRole",
+				"name": "role",
+				"type": "uint8"
+			},
+			{
+				"internalType": "string",
+				"name": "identity",
+				"type": "string"
+			},
+			{
+				"internalType": "string",
+				"name": "customURI",
+				"type": "string"
+			}
+		],
+		"name": "addRoleToSoul",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
 				"name": "soul",
 				"type": "address"
 			}
@@ -223,6 +270,25 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 				"internalType": "bytes32",
 				"name": "",
 				"type": "bytes32"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "soul",
+				"type": "address"
+			}
+		],
+		"name": "getSoulRoles",
+		"outputs": [
+			{
+				"internalType": "enum MultiRoleSBT.UserRole[]",
+				"name": "",
+				"type": "uint8[]"
 			}
 		],
 		"stateMutability": "view",
@@ -274,28 +340,24 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 		"inputs": [
 			{
 				"internalType": "address",
-				"name": "to",
+				"name": "soul",
 				"type": "address"
 			},
 			{
-				"internalType": "enum RoleBasedSBT.UserType",
+				"internalType": "enum MultiRoleSBT.UserRole",
 				"name": "role",
 				"type": "uint8"
-			},
-			{
-				"internalType": "string",
-				"name": "identity",
-				"type": "string"
-			},
-			{
-				"internalType": "string",
-				"name": "customURI",
-				"type": "string"
 			}
 		],
-		"name": "mintSBT",
-		"outputs": [],
-		"stateMutability": "nonpayable",
+		"name": "hasRole",
+		"outputs": [
+			{
+				"internalType": "bool",
+				"name": "",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
 		"type": "function"
 	},
 	{
@@ -307,6 +369,24 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 			}
 		],
 		"name": "removeAdmin",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "soul",
+				"type": "address"
+			},
+			{
+				"internalType": "enum MultiRoleSBT.UserRole",
+				"name": "role",
+				"type": "uint8"
+			}
+		],
+		"name": "removeRoleFromSoul",
 		"outputs": [],
 		"stateMutability": "nonpayable",
 		"type": "function"
@@ -350,7 +430,7 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 	{
 		"inputs": [
 			{
-				"internalType": "enum RoleBasedSBT.UserType",
+				"internalType": "enum MultiRoleSBT.UserRole",
 				"name": "",
 				"type": "uint8"
 			}
@@ -369,7 +449,7 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 	{
 		"inputs": [
 			{
-				"internalType": "enum RoleBasedSBT.UserType",
+				"internalType": "enum MultiRoleSBT.UserRole",
 				"name": "role",
 				"type": "uint8"
 			},
@@ -395,24 +475,9 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 		"name": "souls",
 		"outputs": [
 			{
-				"internalType": "enum RoleBasedSBT.UserType",
-				"name": "role",
-				"type": "uint8"
-			},
-			{
 				"internalType": "string",
 				"name": "identity",
 				"type": "string"
-			},
-			{
-				"internalType": "string",
-				"name": "profileURI",
-				"type": "string"
-			},
-			{
-				"internalType": "uint64",
-				"name": "issuedAt",
-				"type": "uint64"
 			}
 		],
 		"stateMutability": "view",
@@ -445,12 +510,12 @@ const contractAddress = "0x1Ef187b8982E3D1d735E286834a270033d5EbEA8"; // Replace
 				"type": "address"
 			},
 			{
-				"internalType": "enum RoleBasedSBT.UserType",
-				"name": "newRole",
-				"type": "uint8"
+				"internalType": "string",
+				"name": "newIdentity",
+				"type": "string"
 			}
 		],
-		"name": "updateRole",
+		"name": "updateIdentity",
 		"outputs": [],
 		"stateMutability": "nonpayable",
 		"type": "function"
